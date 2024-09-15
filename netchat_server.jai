@@ -1,9 +1,10 @@
 #import "Basic";
 #import "Socket";
 #import "Thread";
-//#import "POSIX";
+#import "String";
 
-Logical :: bool;
+#load "netchat_common.jai";
+
 server_socket: Socket;
 
 ClientInfo :: struct {
@@ -40,21 +41,22 @@ IncomingConnectionThread :: (thread: *Thread) -> s64 {
 	return 0;
 }
 
-PollSocket :: (sock: SOCKET, timeout_millis: s32) -> (alive: Logical, data_ready: Logical) {
-	poll_params := pollfd.[
-		.{ fd = sock, events = POLLRDNORM }
-	];
-	WSAPoll(poll_params.data, 1, timeout_millis);
-	
-	revents := poll_params[0].revents;
-	alive := !((revents & POLLERR) || (revents & POLLHUP));
-	data_ready := cast(Logical) revents & POLLRDNORM;
-	
-	return alive, data_ready;
-}
-
 main :: () {
-	print("NetChat Server!\n");
+	print("NetChadt Server!\n");
+	
+	args := get_command_line_arguments();
+	
+	for arg: args {
+		if contains(arg, "-address") {
+			SERVER_ADDRESS = arg;
+			advance(*SERVER_ADDRESS, 9);
+		} else if contains(arg, "-port") {
+			advance(*arg, 6);
+			SERVER_PORT = string_to_int(arg);
+		}
+	}
+	
+	log("Server address: %:%", SERVER_ADDRESS, SERVER_PORT);
 	
 	if !socket_init() {
 		log_error("Failed to initialize sockets. Error=%", get_last_socket_error());
@@ -73,8 +75,8 @@ main :: () {
 		return;
 	}
 	
-	if bind(server_socket, "127.0.0.1", 42069) != 0 {
-		log_error("Failed to bind server socket to 127.0.0.1:42069. Error=%", get_last_socket_error());
+	if bind(server_socket, SERVER_ADDRESS, SERVER_PORT) != 0 {
+		log_error("Failed to bind server socket. Error=%", get_last_socket_error());
 		return;
 	}
 	
@@ -85,8 +87,6 @@ main :: () {
 	
 	init(*ConnectedClientsMutex);
 	
-	// accept clients on another thread
-	
 	IncomingConnectionThreadHandle: Thread;
 	if !thread_init(*IncomingConnectionThreadHandle, IncomingConnectionThread) {
 		log_error("Failed to starting incoming connection handler thread");
@@ -94,14 +94,7 @@ main :: () {
 		return;
 	}
 	thread_start(*IncomingConnectionThreadHandle);
-	
-	// update the connected clients once a second on the main thread
-	//  - lock
-	//  - check if still connected
-	//  - check if there is any data they sent, if so place into buffer
-	//  - distribute to other clients.
-	//  - unlock
-	
+
 	client_input_builder: String_Builder;
 	init_string_builder(*client_input_builder);
 	
@@ -147,6 +140,7 @@ main :: () {
 		
 		unlock(*ConnectedClientsMutex);
 		
+		// TODO: Experiment with shorter sleepy time.
 		sleep_milliseconds(1 * 1000);
 	}
 	

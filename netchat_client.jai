@@ -7,26 +7,46 @@
 #import "Math";
 #import "String";
 
+#load "netchat_common.jai";
+
 MySocket: SOCKET = INVALID_SOCKET;
 
-ConnectNetchatServer :: (address: string, port: u16) {
+ConnectNetchatServer :: (address: string, port: u16) -> Logical {
+	log("Connecting to server %:%...", address, port);
+	
 	if !socket_init() {
 		log_error("Failed to initialize sockets. Error=%", get_last_socket_error());
-		return;
+		return false;
 	}
 	
 	MySocket = socket(AF_INET, .STREAM, 0);
 	if MySocket == INVALID_SOCKET {
 		log_error("Failed to create client socket. Error=%", get_last_socket_error());
-		return;
+		return false;
 	}
 	
-	server_address := CreateSocketInternetAddressStruct("127.0.0.1", 42069);
-	if connect(MySocket, cast(*sockaddr) *server_address, size_of(type_of(server_address))) != 0 {
-		print("Failed to connect to server. Error=%\n", get_last_socket_error());
-		close_and_reset(*MySocket);
-		return;
+	internet_socket_address_struct: sockaddr_in;
+	internet_socket_address_struct.sin_family = AF_INET;
+	
+	c_address := to_c_string(address);
+   defer free(c_address);
+	addr := inet_addr(c_address);
+	#if OS == .WINDOWS {
+		internet_socket_address_struct.sin_addr.S_un.S_addr = addr;
+	} else {
+		internet_socket_address_struct.sin_addr.s_addr = addr;
 	}
+	
+	internet_socket_address_struct.sin_port = htons(port);
+	
+	server_address := internet_socket_address_struct;
+	if connect(MySocket, cast(*sockaddr) *server_address, size_of(type_of(server_address))) != 0 {
+		print("Failed to connect to server. OS_Error=%\n", get_last_socket_error());
+		close_and_reset(*MySocket);
+		return false;
+	}
+	
+	return true;
 }
 
 DisconnectNetchatServer :: () {
@@ -35,30 +55,32 @@ DisconnectNetchatServer :: () {
 	}
 }
 
-Logical :: bool;
-
-PollSocket :: (sock: SOCKET, timeout_millis: s32) -> (alive: Logical, data_ready: Logical) {
-	poll_params := pollfd.[
-		.{ fd = sock, events = POLLRDNORM }
-	];
-	WSAPoll(poll_params.data, 1, timeout_millis);
-	
-	revents := poll_params[0].revents;
-	alive := !((revents & POLLERR) || (revents & POLLHUP));
-	data_ready := cast(Logical) revents & POLLRDNORM;
-	
-	return alive, data_ready;
-}
-
 MAX_BUFFER_SIZE :: 1_000_000;
 CHAT_BUFFER_DATA: [MAX_BUFFER_SIZE]u8;
 CHAT_BUFFER := string.{ data = CHAT_BUFFER_DATA.data, count = 0 };
 
-SERVER_IP := "192.168.0.124";
-SERVER_PORT: u16 = 42069;
-
 main :: () {
-	window := create_window(800, 600, "NetChat!");
+	args := get_command_line_arguments();
+	
+	if args.count != 3 {
+		print("netchat_client <IP_ADDRESS> <PORT>");
+		return;
+	}
+	
+	SERVER_IP = args[1];
+	
+	port_value, success := string_to_int(args[2]);
+	if !success {
+		log_error("Unable to parse port argument \"%\" as an integer", args[2]);
+		return;
+	}
+	SERVER_PORT = cast(u16) port_value;
+	
+	if !ConnectNetchatServer(SERVER_IP, SERVER_PORT) {
+		return;
+	}
+	
+	window := create_window(800, 600, "NetChadt!");
 	
 	set_render_target(window);
 	
@@ -67,15 +89,11 @@ main :: () {
 	
 	ui_init();
 	
-	ConnectNetchatServer(SERVER_IP, SERVER_PORT);
-	
 	current_time: float64;
 	last_time: float64;
 	
 	ChatBufferBuilder: String_Builder;
 	init_string_builder(*ChatBufferBuilder);
-	
-//	ClientInput := "<message here>";
 	
 	running := true;
 	while running {
@@ -149,26 +167,4 @@ main :: () {
 	}
 	
 	DisconnectNetchatServer();		
-}
-
-modify_string :: (ps: *string, new_value: string) {
-    free(ps.*);
-    ps.* = copy_string(new_value);
-}
-
-CreateSocketInternetAddressStruct :: (address: string, port: u16) -> sockaddr_in {
-	internet_socket_address_struct: sockaddr_in;
-	internet_socket_address_struct.sin_family = AF_INET;
-	
-	c_address := to_c_string(address);
-   defer free(c_address);
-	addr := inet_addr(c_address);
-	#if OS == .WINDOWS {
-		internet_socket_address_struct.sin_addr.S_un.S_addr = addr;
-	} else {
-		internet_socket_address_struct.sin_addr.s_addr = addr;
-	}
-	
-	internet_socket_address_struct.sin_port = htons(port);
-	return internet_socket_address_struct;
 }
